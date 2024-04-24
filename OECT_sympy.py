@@ -4,7 +4,8 @@ plt.close()
 import numpy as np
 import seaborn as sns
 from sympy import *
-from sympy.plotting.plot import plot,Plot
+# from sympy.plotting.plot import plot,Plot
+from spb import *
 
 # Make sure to: set PYTHONPATH=.
 import lib.widget_display_lib
@@ -43,7 +44,7 @@ class DeviceModel():
 
         return(v,n,u)
     
-    def fp(self, f, eval_pars=[None], constants_replace=True):
+    def fp(self, func, eval_pars=[None], constants_replace=True):
         '''Function for evaluating the equation for only the desired parameters, 
         others are replaced by numerical value.
         Returns the sympy expression with that allows the mapping for the desired input parameters'''
@@ -68,25 +69,27 @@ class DeviceModel():
                     mapping.append((constant,val))
 
 
-        f_eval = f.subs(mapping)
+        f_eval = func.subs(mapping)
 
         return f_eval
     
-    def fp_plot(self, x, f, eval_pars_sliders=[None], xlim=None, ylim=None, **kwargs):
+    def fp_plot(self, x, func, eval_pars_sliders=[None], xlim=None, ylim=None, MPL_kwargs=None, **kwargs):
         '''
-        Plots a function, f, vs one of its variables, x, and uses the rest as sliders, eval_pars_sliders.
+        Plots a function, func, vs one of its variables, x, and uses the rest as sliders, eval_pars_sliders.
         x should contain the symbol and its limits e.g.: "(V_DS, 0, 1)"
         '''
         if xlim==None:
             xlim = x[1:]
         
+        MPL_kwargs['xlim']=xlim
+
         if eval_pars_sliders != [None]:
             eval_pars = [x[0]] + list(eval_pars_sliders.keys())
         else: 
             eval_pars = [x[0]]
         
         parameterized_f = self.fp(
-                f,
+                func,
                 eval_pars,
             )
 
@@ -97,54 +100,56 @@ class DeviceModel():
                 del eval_pars_sliders[x[0]]
 
         widget = make_widget(
-            x,
-            parameterized_f,
-            eval_pars_sliders,
-            xlim=xlim,
-            ylim=ylim,
-            **kwargs
+            domain=x,
+            func=parameterized_f,
+            params=eval_pars_sliders,
+            MPL_kwargs=MPL_kwargs,
         )
         widget.equation = parameterized_f
 
         return widget
 
-    def fp_plot(self, x, f, eval_pars_sliders=[None], xlim=None, ylim=None, **kwargs):
+    def fp_plots(self, widget_group):
         '''
-        Plots a group of functions, f, vs one of its variables, x, and uses the rest as sliders, eval_pars_sliders.
-        x should contain the symbol and its limits e.g.: "(V_DS, 0, 1)"
+        Plots a group of functions, requires the widget_group variable.
+        this will plot a family of widgets sharing some sliders that are under the 'slider' key in this group.
+        The input widget_group looks as follow:
+            widget_group = {
+                'sliders' : {
+                    <symbol> : (initial value, lower limit, upper limit, 
+                                (opt) N+1 of in values in slider, (opt) custom variable label, (opt) scaling = 'lin'/'log')
+                },
+
+                '<funtion name>' :
+                    (<x-axis symbol>, (lower limit, upper limit)),
+                    <y-axis expression>,
+                    {
+                        <Additional MPL layout parameters
+                        e.g.:
+                        'ylim' : (-2.5,2.5),
+                        'ylabel' : '$V(x)$'>
+                    }
+                ),
+            }
         '''
-        if xlim==None:
-            xlim = x[1:]
+        plots = []
+        for key, function_plot in widget_group.items():
+            if key == 'sliders':
+                continue
+            
+            p = self.fp_plot(
+                    x=function_plot[0],
+                    func=function_plot[1],
+                    eval_pars_sliders=widget_group['sliders'],
+                    MPL_kwargs = function_plot[2], # additional MPL parameters
+                )
+            plots.append(p)
         
-        if eval_pars_sliders != [None]:
-            eval_pars = [x[0]] + list(eval_pars_sliders.keys())
-        else: 
-            eval_pars = [x[0]]
-        
-        parameterized_f = self.fp(
-                f,
-                eval_pars,
-            )
+        widget_grid = plotgrid(*plots, nc=2)
 
-        # if no sliders are specified make one for each free variable except the x-axis variable
-        if eval_pars_sliders == [None]:
-            eval_pars_sliders = {symbol : (1, -10, 10, 20) for symbol in parameterized_f.free_symbols}
-            if x[0] in eval_pars_sliders:
-                del eval_pars_sliders[x[0]]
+        return widget_grid,plots
 
-        widget = make_widget(
-            x,
-            parameterized_f,
-            eval_pars_sliders,
-            xlim=xlim,
-            ylim=ylim,
-            **kwargs
-        )
-        widget.equation = parameterized_f
-
-        return widget
-
-    def get_lamba(self, f, eval_pars=None):
+    def get_lamba(self, func, eval_pars=None):
         '''Function for evaluating the equation for only the desired parameters, 
         others are replaced by numerical value.
         Returns the lambda function with that allows the mapping for the desired input parameters'''
@@ -157,7 +162,7 @@ class DeviceModel():
             if par in eval_pars:
                 pars.append(par)
         
-        f_eval = self.fp(f, eval_pars)
+        f_eval = self.fp(func, eval_pars)
         f_lambda = lambdify(pars,f_eval)
 
         return f_lambda
@@ -195,6 +200,9 @@ class SimpleOECT(DeviceModel):
 
             'V_P'   : (1.23, 'pinch voltage', 'V'), #bernards2007 fig3
             # 'G'     : (1.2e-4, 'channel conductivity', 'S'), #bernards2007
+            
+            'I_G_magnitude'   : (6.6236e-3, 'gate current step magnitude', 'V'),#bernards2007 fig6 (is equal to 1 a.u.)
+            'V_G_magnitude'   : (0.5, 'gate voltage step magnitude', 'A'),#bernards2007 fig8
             }
 
         self.parameter_values, self.parameter_names, self.parameter_units = self.init_variables(self.parameters_init)
@@ -203,39 +211,17 @@ class SimpleOECT(DeviceModel):
         # Categorical parameters
         self.material = 'PEDOT:PSS' # material name
 
-        self.cvars = {} # Default curve variables
-        self.make_cvars()
-        self.curves = {} # Default curves to use
-        self.make_curves()
+        variables = 'x, t, t0, t1, f'
+        for var in variables.split(', '):
+            self.set_variable(var)
 
-    def make_cvars(self):
-        x = self.cvars['x'] = Symbol('x')
-        Vx = self.cvars['Vx'] = self.V(x)
-        Ex = self.cvars['Ex'] = self.dVdx(Vx)
-        Qx = self.cvars['Qx'] = self.Q(Vx)
-        px = self.cvars['px'] = self.p(Qx)
-        Jx = self.cvars['Jx'] = self.J(Vx)
-        
-        f = self.cvars['f'] = Symbol('f')
-        t = self.cvars['t'] = Symbol('t')
-        t0 = self.cvars['t0'] = Symbol('t0')
-        t1 = self.cvars['t1'] = Symbol('t1')
-        dt = self.cvars['dt'] = Symbol('dt')
-        Qt = self.cvars['Qt'] = self.Q(t=t)
-        pt = self.cvars['pt'] = self.p(Qt=Qt)
-        expt = self.cvars['expt'] = self.exp(t=t, t0=t0)
-        
-        IGmag = self.cvars['I_G_magnitude'] = Symbol('IGmag')
-        IGt = self.cvars['IGt'] = self.I_Gt(t=t, t0=t0, t1=t1, I_G_magnitude=IGmag)
-        ISDtIG = self.cvars['ISDtIG'] = self.I_SD(t=t, I_G=IGt, f=f, t0=t0, t1=t1)
-        VGmag = self.cvars['V_G_magnitude'] = Symbol('VGmag')
-        VGt = self.cvars['VGt'] = self.V_Gt(t=t, t0=t0, t1=t1, V_G_magnitude=VGmag)
-        ISDtVG = self.cvars['ISDtVG'] = self.I_SD(t=t, V_G=VGt, f=f, t0=t0, t1=t1)
+        self.make_curves()
 
     def make_curves(self):
         xleft = -.5*self.fp(self.L)
         xright = 1.5*self.fp(self.L)
         xlim = (xleft,xright)
+        print(*xlim)
         
         tleft = -1
         tright = 20
@@ -243,208 +229,180 @@ class SimpleOECT(DeviceModel):
         tlim = (tleft,tright)
         tlim2 = (tleft,tright2)
 
-        tau_i = self.fp(self.tau_i())
-
-        # self.plot_groups = {
-        #     "Channel electrical" : (
-        #         self.V,
-        #         'E(x)',
-        #         'Q(x)',
-        #         'J(x)',
-        #     ),
-
-        #     "Steady state current" : (
-        #         (self.I_SD, 
-        #             (self.V_DS,-2,2)),
-        #         'fig3(V_DS)',
-        #     ),
-
-            
-        # }
-
-
-        self.curves = {
-
-            'I_SD(V_DS)' : self.fp_plot(
-                (self.V_DS,-2,2),
-                self.I_SD(),
-                {
-                    self.V_G: (0,0,2)
+        self.widget_groups = {
+            "Channel electrical" : {
+                'sliders' : {
+                    self.V_DS : (0,-2,2),
+                    self.V_G: (0,0,2),
                 },
-                ylim=(-1e-4,3e-4),
-                ylabel='$I_{SD}$',
-                title='$I_{SD}(V_{DS})$',
-            ),
 
-            'fig3' : self.fp_plot(
-                (self.V_DS, -.5, .5),
-                self.I_SD(),
-                {
+                'V(x)' : (
+                    (self.x,*xlim),
+                    self.V(),
+                    { 
+                        'ylim' : (-2.5,2.5),
+                        'ylabel' : '$V(x)$',
+                    }
+                ),
+
+                'E(x)' : (
+                    (self.x,*xlim),
+                    self.E(),
+                    {
+                        'ylim' : (-5e2,5e2),
+                        'ylabel' : '$E(x)$',
+                    }
+                ),
+
+                'Q(x)' : (
+                    (self.x,*xlim),
+                    self.Q(),
+                    {
+                        'ylim':(-2e-7,2e-7),
+                        'ylabel':'$Q(x)$',
+                    }
+                ),
+                            
+                # 'p(x)' : (
+                #     (self.x,*xlim),
+                #     self.p(),
+                #     {
+                #         'ylim' : (1e-30,1e30),
+                #         'ylabel' : '$p(x)$',
+                #         'yscale' : 'log',
+                #     }
+                # ),
+
+                # 'J(x)' : (
+                #     (self.x,*xlim),
+                #     self.J(),
+                #     {
+                #         'ylim' : (-0.2e6,2e6),
+                #         'ylabel' : '$J(x)$',
+                #         # 'yscale' : 'log'
+                #     }
+                # ),
+            },
+
+            "Steady state current" : {
+                'sliders' : {
                     self.V_G : (0, 0, 0.6, 3)
                 },
-                ylim=(-70e-6,70e-6),
-                ylabel = '$I_{sd} [\mu A]$',
-            ),   
 
-            'V(x)' : self.fp_plot(
-                (self.cvars['x'],*xlim),
-                self.cvars['Vx'],
-                {
-                    self.V_DS: (0,-2,2)
-                },
-                ylim=(-2.5,2.5),
-                ylabel='$V(x)$',
-            ),
+                'I_SD(V_DS)' : (
+                    (self.V_DS,-2,2),
+                    self.I_SD(),
+                    {
+                        'ylim' : (-1e-4,3e-4),
+                        'ylabel' : '$I_{SD}$',
+                        'title' : '$I_{SD}(V_{DS})$',
+                    }
+                ),
 
-            'E(x)' : self.fp_plot(
-                (self.cvars['x'],*xlim),
-                self.cvars['Ex'],
-                {
-                    self.V_DS: (0,-2,2)
-                },
-                ylim=(-5e3,5e3),
-                ylabel='$E(x)$',
-            ),
+                'fig3' : (
+                    (self.V_DS, -.5, .5),
+                    self.I_SD(),
+                    {
+                        'ylim' : (-70e-6,70e-6),
+                        'ylabel' : '$I_{sd} [\mu A]$',
+                    },
+                )
+            },
 
-            'Q(x)' : self.fp_plot(
-                (self.cvars['x'],*xlim),
-                self.cvars['Qx'],
-                {
-                    # self.cvars['dx']: (self.fp(self.L)/10,self.fp(self.L)/100,self.fp(self.L)/10),
-                    self.V_DS: (0,-2,2),
-                    self.V_G: (0,0,2),
+            'Transient voltage and current step response' : {
+                'sliders' : {
+                    self.t0 : (0,*tlim, len(range(*tlim))),
+                    self.t1 : (0,*tlim, len(range(*tlim))),
+                    self.I_G_magnitude : (1,0, 1, 10),
+                    self.V_G_magnitude : (1,0, 1, 10),
+                    self.f : (.5, 0, .5),
+                    self.V_DS : (2, -2, 2)
                 },
-                ylim=(-2e-7,2e-7),
-                ylabel='$Q(x)$',
-            ),
-                        
-            'p(x)' : self.fp_plot(
-                (self.cvars['x'],*xlim),
-                self.cvars['px'],
-                {
-                    self.V_DS: (0,-2,2),
-                    self.V_G: (0,0,2),
-                },
-                ylim=(1e-30,1e30),
-                ylabel='$p(x)$',
-                yscale='log',
-            ),
 
-            'J(x)' : self.fp_plot(
-                (self.cvars['x'],*xlim),
-                self.cvars['Jx'],
-                {
-                    self.V_DS: (0,-2,2),
-                    self.V_G: (0,0,2),
-                },
-                ylim=(-0.2e6,2e6),
-                ylabel='$J(x)$',
-                # yscale='log'
-            ),
-            
-            'I_G(t)' : self.fp_plot(
-                (self.cvars['t'],*tlim),
-                self.cvars['IGt'],
-                {
-                    self.cvars['t0']: (0,*tlim, len(range(*tlim))),
-                    self.cvars['t1']: (0,*tlim, len(range(*tlim))),
-                    self.cvars['I_G_magnitude']: (1e-6,1e-6, 1e-5, 10),
-                },
-                ylim=(-1.5e-5,1.5e-5),
-                ylabel='$I_G(t)$',
-            ),
+                'I_G(t)' : (
+                    (self.t,*tlim),
+                    self.I_G_step(),
+                    {
+                        'ylim' : (-1.5e-5,1.5e-5),
+                        'ylabel' : '$I_G(t)$',
+                    }
+                ),
 
-            'V_G(t)' : self.fp_plot(
-                (self.cvars['t'],*tlim),
-                self.cvars['VGt'],
-                {
-                    self.cvars['t0']: (0,*tlim, len(range(*tlim))),
-                    self.cvars['t1']: (0,*tlim, len(range(*tlim))),
-                    self.cvars['V_G_magnitude']: (1,0, 1, 10),
-                },
-                ylim=(-1.5,1.5),
-                ylabel='$V_G(t)$',
-            ),
+                'V_G(t)' : (
+                    (self.t,*tlim),
+                    self.V_G_step(),
+                    {
+                        'ylim' : (-1.5,1.5),
+                        'ylabel' : '$V_G(t)$',
+                    }
+                ),
 
-            'I_SD(t,I_G)' : self.fp_plot(
-                (self.cvars['t'],*tlim),
-                self.cvars['ISDtIG'],
-                {
-                    self.cvars['t0']: (0,*tlim, len(range(*tlim))),
-                    self.cvars['t1']: (0,*tlim, len(range(*tlim))),
-                    self.cvars['I_G_magnitude']: (1e-6,1e-6, 1e-5, 10),
-                    self.cvars['f']: (0, 0, .5),
-                    self.V_DS: (0, -0.1, 0.1)
-                },
-                # ylim=(-5e-5,5e-5),
-                ylabel='$I_{SD}(t,I_G)$',
-            ),
+                'I_SD(t,I_G)' : (
+                    (self.t,*tlim),
+                    self.I_SD(transient=True, transient_input='I'),
+                    {
+                        # 'ylim' : (-5e-5,5e-5),
+                        'ylabel' : '$I_{SD}(t,I_G)$',
+                    }
+                ),
 
-            'I_SD(t,V_G)' : self.fp_plot(
-                (self.cvars['t'],*tlim2),
-                self.cvars['ISDtVG'],
-                {
-                    self.cvars['t0']: (0,*tlim2, len(range(*tlim))),
-                    self.cvars['t1']: (0,*tlim2, len(range(*tlim))),
-                    self.cvars['V_G_magnitude']: (1,0, 1, 10),
-                    self.cvars['f']: (.5, 0, .5),
-                    self.V_DS: (2, -2, 2, 100)
-                },
-                # ylim=(-10,10),
-                xlabel='$t/\\tau_i$',
-                ylabel='$I_{SD}(t,V_G)$',
-            ),
+                'I_SD(t,V_G)' : (
+                    (self.t,*tlim2),
+                    self.I_SD(transient=True, transient_input='V'),
+                    {
+                        # 'ylim' : (-10,10),
+                        'xlabel' : '$t/\\tau_i$',
+                        'ylabel' : '$I_{SD}(t,V_G)$',
+                    }
+                ),
 
-            'fig7' : self.fp_plot(
-                (self.cvars['t'],-1,3),
-                self.cvars['ISDtVG'].subs(self.cvars['t0'],0) / ( self.G() * ( 1 - ( (-.5*self.V_DS)/self.V_P) ) * self.V_DS ),
-                {
-                    self.cvars['t0']: (0,*tlim, len(range(*tlim))),
-                    self.cvars['t1']: (0,*tlim, len(range(*tlim))),
-                    self.cvars['V_G_magnitude']: (1,0, 1, 10),
-                    self.cvars['f']: (.5, 0, .5),
-                    self.V_DS: (2, -2, 2)
-                },
-                # ylim=(-5e-5,5e-5),
-                xlabel='$t/\\tau_i$',
-                ylabel='$I_{SD}(t,I_G)$',
-            ),
+                'fig7' : (
+                    (self.t,-1,3),
+                    self.I_SD(transient=True, transient_input='V').subs(self.t0,0) / ( self.G() * ( 1 - ( (-.5*self.V_DS)/self.V_P) ) * self.V_DS ),
+                    {
+                        # 'ylim' : (-5e-5,5e-5),
+                        'xlabel' : '$t/\\tau_i$',
+                        'ylabel' : '$I_{SD}(t,I_G)$',
+                    }
+                ),
+            },
 
-            'Q(t)' : self.fp_plot(
-                (self.cvars['t'],*tlim),
-                self.cvars['Qt'],
-                {
+            'Other' : {
+                'sliders' : {
                     self.V_DS: (0,-2,2),
                     self.V_G: (0,0,2),
                     self.R_s: (1e6,1,9,51, 'R_{solution}', 'log'),
+                    self.t0: (0,*tlim, len(range(*tlim))),
                 },
-                ylim=(-2e-7,2e-7),
-                ylabel='$Q(t)$',
-            ),
 
-            'p(t)' : self.fp_plot(
-                (self.cvars['t'],*tlim),
-                self.cvars['pt'],
-                {
-                    self.V_DS: (0,-2,2),
-                    self.V_G: (1,0,2),
-                    # self.dx: (self.fp(self.L)/10,self.fp(self.L)/1000,self.fp(self.L)/10),
-                    self.R_s: (1e6,1,9,51, 'R_{solution}', 'log'),
-                },
-                # ylim=(1e27,1e28),
-                yscale='symlog',
-                ylabel='$p(t)$',
-            ),
+                'Q(t)' : (
+                    (self.t,*tlim),
+                    self.Q(transient=True),
+                    {
+                        'ylim' : (-2e-7,2e-7),
+                        'ylabel' : '$Q(t)$',
+                    }
+                ),
 
-            'exp(t)' : self.fp_plot(
-                (self.cvars['t'],*tlim),
-                self.cvars['expt'],
-                {
-                    self.cvars['t0']: (0,*tlim, len(range(*tlim))),
-                },
-                ylim=(0,1),
-                ylabel='$exp(t)$',
-            )
+                'p(t)' : (
+                    (self.t,*tlim),
+                    self.p(transient=True),
+                    {
+                        # 'ylim' : (1e27,1e28),
+                        'yscale' : 'symlog',
+                        'ylabel' : '$p(t)$',
+                    }
+                ),
+
+                'exp(t)' : (
+                    (self.t,*tlim),
+                    self.exp(),
+                    {
+                        'ylim' : (0,1),
+                        'ylabel' : '$exp(t)$',
+                    }
+                ),
+            },
         }
 
     def plot_figures(self):
@@ -493,23 +451,24 @@ class SimpleOECT(DeviceModel):
         # return J
         pass
 
-    def dVdx(self, Vx=None):
-        if Vx == None:
-            Vx = self.V(self.cvars['x'])
+    def E(self):
+        x = self.x
+        V = self.V()
 
         V_DS    = self.V_DS
         L       = self.L
 
-        # f = Vx*self.cvars['x']**2 
-        f = diff(Vx,self.cvars['x'])
+        func = diff(V,x)
 
-        return f
+        return func
 
-    def V(self, x=Symbol('x')):
+    def V(self):
+        x = self.x
+
         V_DS    = self.V_DS
         L       = self.L
 
-        f = Piecewise(
+        func = Piecewise(
                 (
                     V_DS,
                     ((L < x))
@@ -524,32 +483,39 @@ class SimpleOECT(DeviceModel):
                 ),
             )
 
-        return f
+        return func
 
-    def exp(self, t=None, t0=None, percentage=.99):
+    def exp(self, percentage=.99):
+        t  = self.t
+        t0 = self.t0
 
-        t1 = t0+N(-ln(1-percentage))
-        f = (Heaviside(t-t0)-Heaviside(t-t1)) * exp(-(t-t0))
+        t_stop = t0+N(-ln(1-percentage))
+        func = (Heaviside(t-t0)-Heaviside(t-t_stop)) * exp(-(t-t0))
 
-        return f
+        return func
 
-    def Q(self, Vx=None, t=None):
-        if t==None:
+    def Q(self, transient=False):
+        if transient==False:
+            x = self.x
+            V = self.V()
+            
             c_d     = self.c_d
             W       = self.W
-            dx       = self.dx
+            dx      = self.dx
             V_G     = self.V_G
 
-            f = c_d * W * dx * (V_G - Vx)
+            func = c_d * W * dx * (V_G - V)
             # L       = self.L
             # discretized_N = L/dx
-            # f = Piecewise(
+            # func = Piecewise(
             #     *[(
             #         c_d * W * dx * (V_G - Vx),
             #         (((i-.5)*dx < x) & (x < (i+.5)*dx))
             #     ) for i in range(10)])
         
-        if t!=None:
+        if transient==True:
+            t     = self.t
+
             c_d     = self.c_d
             W       = self.W
             dx      = self.dx
@@ -565,7 +531,7 @@ class SimpleOECT(DeviceModel):
             Q_ss = C_d * deltaV
             tau_i = R_s*C_d
 
-            f = Piecewise(
+            func = Piecewise(
                 (
                     Q_ss * ( 1 - exp(-t/tau_i) ),
                     t > 0,
@@ -576,9 +542,10 @@ class SimpleOECT(DeviceModel):
                 )
             )
 
-        return f
+        return func
 
-    def p(self, Qx=None, Qt=None):
+    def p(self, transient=False):
+        Q = self.Q(transient=transient)
         
         p0      = self.p0
         q       = self.q
@@ -587,14 +554,16 @@ class SimpleOECT(DeviceModel):
         dx      = self.dx
         T       = self.T
 
-        if Qt == None:
-            f = p0 * (1 - Qx/(q*p0*(dx*W*T)))
+        if transient==False:
+
+            func = p0 * (1 - Q*(q*p0*(dx*W*T)))
         
-        if Qt != None:
-            f = Piecewise(
+        if transient==True:
+
+            func = Piecewise(
                 (
-                    p0 * (1 - Qt/(q*p0*(L*W*T))),
-                    Qt > 0,
+                    p0 * (1 - Q/(q*p0*(L*W*T))),
+                    Q > 0,
                 ),
                 (
                     p0,
@@ -602,7 +571,7 @@ class SimpleOECT(DeviceModel):
                 )
             )
 
-        return f
+        return func
 
     def V_Rdrop(self, x, R_fraction):
         V_DS    = self.V_DS
@@ -611,13 +580,13 @@ class SimpleOECT(DeviceModel):
         V1 = V_DS*(R_fraction/2)
         V2 = V_DS*(1-R_fraction/2)
 
-        f = Piecewise(
+        func = Piecewise(
             (
                 V1 + (x/L) * (V2-V1),
                 ((.25*L < x) & (x < .75*L))
             ))
 
-        return f
+        return func
 
     def J_e(self, Vx=None):
         '''Electron flux'''
@@ -626,23 +595,26 @@ class SimpleOECT(DeviceModel):
         mu_p = self.mu_p
         dVdx = self.dVdx(Vx)
 
-        f = q * mu_p * p0 * dVdx
+        func = q * mu_p * p0 * dVdx
         
-        return f
+        return func
     
-    def J(self, Vx=None):
+    def J(self):
         '''Total flux'''
+        x = self.x
+        Vx = self.V()
+        E     = self.E()
+
         q       = self.q
         mu_p    = self.mu_p
         p0       = self.p0
         V_G      = self.V_G
         V_DS     = self.V_DS
         V_P      = self.V_P
-        dVdx     = self.dVdx(Vx)
 
-        f = q * mu_p * p0 * ( 1 - (V_G-V_DS)/V_P ) * dVdx
+        func = q * mu_p * p0 * ( 1 - (V_G-V_DS)/V_P ) * E
         
-        return f
+        return func
     
     def _J(self, Vx=None):
         '''Total flux'''
@@ -659,9 +631,9 @@ class SimpleOECT(DeviceModel):
         dVdx     = self.dVdx(Vx)
         L        = self.L
         
-        f = q * mu_p * p0 * ( 1 - (V_G-V_DS)/V_P ) * dVdx
+        func = q * mu_p * p0 * ( 1 - (V_G-V_DS)/V_P ) * dVdx
         
-        return f
+        return func
     
     def _I(self, Vx=None):
         '''Total flux'''
@@ -680,9 +652,9 @@ class SimpleOECT(DeviceModel):
         T        = self.T
         L        = self.L
         
-        f = W*T*self._J()
+        func = W*T*self._J()
         
-        return f
+        return func
     
     def J_Rdrop(self, Vx=None):
         '''Total flux'''
@@ -695,9 +667,9 @@ class SimpleOECT(DeviceModel):
         dVdx     = self.dVdx(Vx)
 
         
-        f = q * mu_p * p0 * ( 1 - (V_G-V_DS)/V_P ) * dVdx
+        func = q * mu_p * p0 * ( 1 - (V_G-V_DS)/V_P ) * dVdx
         
-        return f
+        return func
 
     def G(self):
         q       = self.q
@@ -719,27 +691,30 @@ class SimpleOECT(DeviceModel):
         V_P = q * p0 * T / c_d
         return(V_P)       
 
-    def I_Gt(self, t=None, t0=None, t1=None, I_G_magnitude=None):
-        if t != None and t0 != None:
-            f = I_G_magnitude * (Heaviside(t-t0) - Heaviside(t-t1))
+    def I_G_step(self):
+        t  = self.t
+        t0 = self.t0
+        t1 = self.t1
+        I_G_magnitude = self.I_G_magnitude
+        
+        func = I_G_magnitude * (Heaviside(t-t0) - Heaviside(t-t1))
 
-        return(f)
+        return(func)
     
-    def V_Gt(self, t=None, t0=None, t1=None, V_G_magnitude=None):
-        if t != None and t0 != None:
-            f = V_G_magnitude * (Heaviside(t-t0) - Heaviside(t-t1))
+    def V_G_step(self):
+        t  = self.t
+        t0 = self.t0
+        t1 = self.t1
+        V_G_magnitude = self.V_G_magnitude
+       
+        func = V_G_magnitude * (Heaviside(t-t0) - Heaviside(t-t1))
 
-        return(f)
+        return(func)
 
-    def I_SD(self, t=None, V_G=None, I_G=None, f=None, t0=None, t1=None):
+    def I_SD(self, transient=False, transient_input='V'):
         V_DS    = self.V_DS
         V_P     = self.V_P
-        if V_G == None:
-            V_G     = self.V_G
-        if t0 == None:
-            t0 = 0
-        if t1 == None:
-            t1 = 0
+        V_G     = self.V_G
         G       = self.G()
 
         c_d     = self.c_d
@@ -749,7 +724,7 @@ class SimpleOECT(DeviceModel):
         mu      = self.mu_p
 
         # Steady state
-        if t==None and I_G==None:
+        if transient==False:
             V_DS_sat = V_G-V_P
             
             I_SD = Piecewise(
@@ -767,34 +742,44 @@ class SimpleOECT(DeviceModel):
                 ),
             )
 
-        # Input gate current
-        if t!=None and I_G!=None and f!=None:
-            self.parameter_values['L'] = 0.5e-3
+        if transient==True:
+            t  = self.t
+            t0 = self.t0
+            t1 = self.t1
+            f = self.f
 
-            tau_e = L**2 / mu * V_DS
+            # Input gate current
+            if transient_input=='I':
+                I_G = self.I_G_step()
+                
+                L = 0.5e-3
 
-            I0 = self.fp(self.I_SD())
+                tau_e = L**2 / mu * V_DS
 
-            I_SD = I0 - I_G * (f + (t-t0)/tau_e)
-        
-        # Input gate voltage
-        if t!=None and f!=None and I_G==None: # check for I_G here because V_G will always have a value
-            # valid only in non-saturation region
-            # I_ss     = G * ( 1 - ((V_G - (.5*V_DS))/V_P) ) * V_DS
-            I_ss_0   = G * ( 1 - (       (-.5*V_DS)/V_P) ) * V_DS
-            I_ss_V_G = G * ( 1 - ((V_G - (.5*V_DS))/V_P) ) * V_DS
+                I0 = self.fp(self.I_SD())
 
-            Delta_I_ss = I_ss_0 - I_ss_V_G # G*V_G*V_DS / V_P
+                I_SD = I0 - I_G * (f + (t-t0)/tau_e)
+            
+            # Input gate voltage
+            if transient_input=='V':
+                # valid only in non-saturation region
+                V_G = self.V_G_step()
 
-            A = W*L
-            C_d = c_d*A
-            tau_i = R_s*C_d
-            tau_e = L**2 / (mu * V_DS)
-            print(self.fp(tau_i))
-            print(self.fp(tau_e))
+                # I_ss     = G * ( 1 - ((V_G - (.5*V_DS))/V_P) ) * V_DS
+                I_ss_0   = G * ( 1 - (       (-.5*V_DS)/V_P) ) * V_DS
+                I_ss_V_G = G * ( 1 - ((V_G - (.5*V_DS))/V_P) ) * V_DS
 
-            #actual equation is with t -> (t/tau_i) but here this is removed for easier plotting
-            I_SD = I_ss_V_G  +  Delta_I_ss * (1 - f*(tau_e/tau_i)) * exp(-(t-t0))
+                Delta_I_ss = I_ss_0 - I_ss_V_G # G*V_G*V_DS / V_P
+
+                A = W*L
+                C_d = c_d*A
+                tau_i = R_s*C_d
+                tau_e = L**2 / (mu * V_DS)
+                # print(self.fp(tau_i))
+                # print(self.fp(tau_e))
+
+                #actual equation is with t -> (t/tau_i) but here this is removed for easier plotting
+                I_SD = I_ss_V_G  +  Delta_I_ss * (1 - f*(tau_e/tau_i)) * exp(-(t-t0))
         
         return(I_SD)    
 
@@ -820,7 +805,7 @@ class SimpleOECT(DeviceModel):
         plot = oect.fp_plot(
             x = (x, .25*L, .75*L),
 
-            f = oect.V_Rdrop(x, R_fraction),
+            func = oect.V_Rdrop(x, R_fraction),
             
             eval_pars_sliders=
             {
@@ -840,7 +825,7 @@ class SimpleOECT(DeviceModel):
         plot = self.fp_plot(
             x = (self.V_DS, -.5, .5),
 
-            f = self.I_SD(),
+            func = self.I_SD(),
             
             eval_pars_sliders=
             {
@@ -870,7 +855,7 @@ class SimpleOECT(DeviceModel):
         plot = self.fp_plot(
             x = (self.V_DS, -1, 1),
 
-            f = (self.I_SD())/G,
+            func = (self.I_SD())/G,
 
             eval_pars_sliders=
             {
@@ -895,7 +880,7 @@ class SimpleOECT(DeviceModel):
         R_series = Symbol('R_series')
         VoverR = self.V_DS / R_series
 
-        f = self.fp(
+        func = self.fp(
             (self.I_SD())/G + VoverR,
             [
                 self.V_DS,
@@ -908,7 +893,7 @@ class SimpleOECT(DeviceModel):
 
         return make_widget(
             (self.V_DS, -1, 1),
-            f,
+            func,
             {
                 self.V_G : (0, 0, 0.6, 2),
                 self.L : (L_value, L_value/2 , L_value, 1),
@@ -919,9 +904,5 @@ class SimpleOECT(DeviceModel):
         )
 
 oect = SimpleOECT()
-ISDtVG = oect.curves['I_SD(t,V_G)']
-# fig3 = oect.figure_3()
-# fig4 = oect.figure_4()
-# fig5 = oect.figure_5()
-# from here call: fig3
-
+widget = oect.widget_groups['Steady state current']
+oect.fp_plots(widget)

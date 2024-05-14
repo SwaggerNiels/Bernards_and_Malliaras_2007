@@ -2,22 +2,30 @@ import importlib
 import matplotlib.pyplot as plt
 plt.close()
 import numpy as np
+# For complex number warnings in jupyter (turn these off)
+import warnings
+warnings.filterwarnings('ignore')
+
 import seaborn as sns
+from IPython.display import display, Latex
+
 from sympy import *
 # from sympy.plotting.plot import plot,Plot
 from spb import *
+# Adapted by Niels ipywidgets.FloatSlider(readout_format='.2e', ...
+# C:\Users\20236275\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\spb\interactive\ipywidgets.py
 
 # Make sure to: set PYTHONPATH=.
 import lib.widget_display_lib
 from lib.widget_display_lib import *
 importlib.reload(lib.widget_display_lib)
 
-import lib.widget_network_lib
-from lib.widget_network_lib import *
-importlib.reload(lib.widget_network_lib)
+# import lib.widget_network_lib
+# from lib.widget_network_lib import *
+# importlib.reload(lib.widget_network_lib)
 
-# init_session(quiet=True, use_latex=True, )
-# init_printing(use_latex=True)
+init_printing(use_latex=True)
+MAX_TIME = 100
 
 class DeviceModel():
     def __init__(self):
@@ -145,7 +153,7 @@ class DeviceModel():
                 )
             plots.append(p)
         
-        widget_grid = plotgrid(*plots, nc=2)
+        widget_grid = plotgrid(*plots, nc=max(round(np.ceil(len(plots)/2)),2))
 
         return widget_grid,plots
 
@@ -186,20 +194,22 @@ class SimpleOECT(DeviceModel):
         self.parameters_init = {
             'D_p'   : (1e-10*cm**2, 'channel hole diffusion', 'm^{2}/s'), #gkoupidenis2023
             'mu_p'  : (1e-2*cm**2, 'channel hole mobility', 'm^{2}/(V·s)'), #bernards2007
-            'p0'     : (1e21/cm**3   , 'hole concentration' , 'm^{-3}'), #own estimate from bernards2007
-            'c_d'   : (15e-7/cm**2, 'double layer capacitance', 'F/m^{2}'), #own value to fit V_P on p0 from range in bernards2007
+            'p_0'    : (1e21/cm**3   , 'initial hole concentration' , 'm^{-3}'), #own estimate from bernards2007
+            'c_d'   : (15e-7/cm**2, 'double layer capacitance', 'F/m^{2}'), #own value to fit V_P on p_0 from range in bernards2007
             'R_s'   : (1e8, 'series resistance', 'Ohm'), #own value
 
             'W'     : (6*mm, 'width of channel', 'm'), #bernards2007
             'L'     : (5*mm, 'length of channel', 'm'), #bernards2007
             'T'     : (62.5*nm, 'thickness of channel', 'm'), #bernards2007 calculated from conduction value 1.2e-4 [S] 
-            'dx'     : (0.5*mm, 'discretization length of channel', 'm'), #own value based on L/10
+            
+            'V_P'   : (1.23, 'pinch voltage', 'V'), #bernards2007 fig3
+            # 'G'     : (1.2e-4, 'channel conductivity', 'S'), #bernards2007
+            
+
+            'dx'    : (0.5*mm, 'discretization length of channel', 'm'), #own value based on L/10
 
             'V_G'   : (0, 'gate voltage', 'V'),
             'V_DS'  : (.5, 'drain-source voltage', 'V'),
-
-            'V_P'   : (1.23, 'pinch voltage', 'V'), #bernards2007 fig3
-            # 'G'     : (1.2e-4, 'channel conductivity', 'S'), #bernards2007
             
             'I_G_magnitude'   : (6.6236e-3, 'gate current step magnitude', 'V'),#bernards2007 fig6 (is equal to 1 a.u.)
             'V_G_magnitude'   : (0.5, 'gate voltage step magnitude', 'A'),#bernards2007 fig8
@@ -211,11 +221,28 @@ class SimpleOECT(DeviceModel):
         # Categorical parameters
         self.material = 'PEDOT:PSS' # material name
 
-        variables = 'x, t, t0, t1, f'
+        # Arbitrary spatial and temporal variables
+            # x, 'space', 'm'
+            # t, 'time', 's'
+            # t0, 'pulse time start', 's'
+            # t1, 'pulse time end', 's'
+            # prf, 'pulse repetition frequency', 'Hz'
+            # dc, 'pulse duty cycle', 'fraction'
+        variables = 'x, t, t0, t1, f, prf, dc'
         for var in variables.split(', '):
             self.set_variable(var)
 
         self.make_curves()
+
+    def __repr__(self):
+        for item in list(oect.parameters_init.items())[:10]:
+            var, details = item
+            val, desc, unit = details
+            print(f'{desc:<40s}',end='')
+            print(f'{"":<10}',end='')
+            display(Latex(rf'----- ${var:>5s} = {val:1.2e}$  ${unit}$'))
+
+        return ''
 
     def make_curves(self):
         xleft = -.5*self.fp(self.L)
@@ -224,24 +251,33 @@ class SimpleOECT(DeviceModel):
         print(*xlim)
         
         tleft = -1
+        tleft2 = 0
         tright = 20
         tright2 = 60
+        tright3 = 1
         tlim = (tleft,tright)
-        tlim2 = (tleft,tright2)
+        tlim2 = (tleft2,tright2)
+        tlim3 = (tleft,tright3)
+        tlim_zoom = (-0.01,0.01)
+
+        cm = 0.01
+        mm = 1e-3
+        um = 1e-6
+        nm = 1e-9
 
         self.widget_groups = {
             "Channel electrical" : {
                 'sliders' : {
-                    self.V_DS : (0,-2,2),
-                    self.V_G: (0,0,2),
+                    self.V_DS : (0,0,1),
+                    self.V_G: (0,0,self.fp(self.V_P)),
                 },
 
                 'V(x)' : (
                     (self.x,*xlim),
                     self.V(),
                     { 
-                        'ylim' : (-2.5,2.5),
-                        'ylabel' : '$V(x)$',
+                        'ylim' : (-1.5,1.5),
+                        'ylabel' : '$V(x)\ [V]$',
                     }
                 ),
 
@@ -249,8 +285,27 @@ class SimpleOECT(DeviceModel):
                     (self.x,*xlim),
                     self.E(),
                     {
-                        'ylim' : (-5e2,5e2),
-                        'ylabel' : '$E(x)$',
+                        'ylim' : (-3e2,3e2),
+                        'ylabel' : '$E(x)\ [V/m]$',
+                    }
+                ),
+
+                'J(x)' : (
+                    (self.x,*xlim),
+                    self.J(),
+                    {
+                        'ylim' : (-0.1e5,.8e5),
+                        'ylabel' : '$J(x)\ [A/m^2]$',
+                        # 'yscale' : 'log'
+                    }
+                ),
+
+                'V_G-V_{DS}(x)' : (
+                    (self.x,*xlim),
+                    self.V_G-self.V(),
+                    { 
+                        'ylim' : (-1.5,2.5),
+                        'ylabel' : '$V_G-V_{DS}(x)\ [V]$',
                     }
                 ),
 
@@ -258,28 +313,33 @@ class SimpleOECT(DeviceModel):
                     (self.x,*xlim),
                     self.Q(),
                     {
-                        'ylim':(-2e-7,2e-7),
-                        'ylabel':'$Q(x)$',
+                        'ylim':(-0.1e-4,2.5e-4),
+                        'ylabel':'$Q(x)\ [C]$',
+                        # 'plot_type':'implicit',
                     }
                 ),
-                            
+
+                'dedoped(x)' : (
+                    (self.x,*xlim),
+                    self.dedoped(),
+                    {
+                        'ylim' : (-.1e-3,3e-3),
+                        'xlabel' : 'ignore x-axis (global level is shown)',
+                        'xticks' : None,
+                        'set_xticks' : None,
+                        'ylabel' : '$\int^x_0 Q / (q p_0 (W*L*T))$ , dedoped fraction',
+                        # 'title' : ("$V_DS$ = {:.2f} V", self.V_DS),
+                        # 'yscale' : 'lin',
+                    }
+                ),
+
                 # 'p(x)' : (
                 #     (self.x,*xlim),
                 #     self.p(),
                 #     {
-                #         'ylim' : (1e-30,1e30),
+                #         # 'ylim' : (1e-30,1e30),
                 #         'ylabel' : '$p(x)$',
-                #         'yscale' : 'log',
-                #     }
-                # ),
-
-                # 'J(x)' : (
-                #     (self.x,*xlim),
-                #     self.J(),
-                #     {
-                #         'ylim' : (-0.2e6,2e6),
-                #         'ylabel' : '$J(x)$',
-                #         # 'yscale' : 'log'
+                #         # 'yscale' : 'lin',
                 #     }
                 # ),
             },
@@ -289,24 +349,104 @@ class SimpleOECT(DeviceModel):
                     self.V_G : (0, 0, 0.6, 3)
                 },
 
-                'I_SD(V_DS)' : (
-                    (self.V_DS,-2,2),
-                    self.I_SD(),
-                    {
-                        'ylim' : (-1e-4,3e-4),
-                        'ylabel' : '$I_{SD}$',
-                        'title' : '$I_{SD}(V_{DS})$',
-                    }
-                ),
-
                 'fig3' : (
                     (self.V_DS, -.5, .5),
                     self.I_SD(),
                     {
-                        'ylim' : (-70e-6,70e-6),
-                        'ylabel' : '$I_{sd} [\mu A]$',
-                    },
+                        'ylim' : (-7e-6,7e-6),
+                        'ylabel' : 'Bernards and Malliaras 2007\nFigure 3\n$I_{SD} [\mu A]$',
+                    }
+                ),
+
+                'I_SD(V_DS)' : (
+                    (self.V_DS,-2,2),
+                    self.I_SD(),
+                    {
+                        'ylim' : (-1e-5,3e-5),
+                        'ylabel' : '$I_{SD}$',
+                        'title' : '$I_{SD}(V_{DS})$',
+                    }
                 )
+            },
+            
+            "Steady state current (V_G)" : {
+                'sliders' : {
+                    self.V_DS : (-.2, -1, 0, 11),
+                    self.V_P : (-.2, -1, 1, 11),
+
+                },
+
+                'I_DS(V_DS)' : (
+                    (self.V_G,-.2,.6),
+                    -self.I_SD(),
+                    {
+                        # 'ylim' : (-3e-4,1e-4),
+                        'ylabel' : '$I_{DS}$',
+                        'title' : '$I_{DS}(V_{DS})$',
+                    }
+                ),
+            },
+
+            'Transient voltage step response' : {
+                'sliders' : {
+                    self.t0 : (20,*tlim2, len(range(*tlim2))),
+                    self.t1 : (40,*tlim2, len(range(*tlim2))),
+                    self.V_G_magnitude : (.5,0, 1, 10),
+                    self.f : (.05, 0, .5),
+                    self.V_DS : (.01, 0.01, 1, 99, '$1/\\tau_e \propto V_DS$'),
+                    # self.W : (100e-6, 10e-6, 10e-3),
+                    # self.L : (100e-6, 10e-6, 10e-3),
+                },
+
+                'V_G(t)' : (
+                    (self.t,*tlim2),
+                    self.V_G_pulse(),
+                    {
+                        'ylim' : (-1.5,1.5),
+                        'ylabel' : '$V_G(t)$',
+                    }
+                ),
+
+                'I_SD(t,V_G)' : (
+                    (self.t,*tlim2),
+                    self.I_SD(transient=True, transient_input='V'),
+                    {
+                        'ylim' : (-1e-6,18e-6),
+                        'xlabel' : '$t/\\tau_i$',
+                        'ylabel' : '$I_{SD}(t,V_G)$',
+                    }
+                ),
+
+                'I_SD(t,V_G)/I_SS(V_G=0)' : (
+                    (self.t,*tlim2),
+                    self.I_SD(transient=True, transient_input='V') / ( self.G() * ( 1 - ( (-.5*self.V_DS)/self.V_P) ) * self.V_DS ),
+                    {
+                        'ylim' : (-.2,1.2),
+                        'xlabel' : '$t/\\tau_i$',
+                        'ylabel' : 'Bernards and Malliaras 2007\nFigure 8\n$I_{SD}(t,V_G)/I_SS(V_G=0)$',
+                    }
+                ),
+
+                'I_SD(t,V_G) logscale' : (
+                    (self.t,*tlim2),
+                    self.I_SD(transient=True, transient_input='V'),
+                    {
+                        'ylim' : (1e-8,25e-6),
+                        'xlabel' : '$t/\\tau_i$',
+                        'ylabel' : '$logarithmic I_{SD}(t,V_G)$',
+                        'yscale' : 'log'
+                    }
+                ),
+
+                # 'fig7' : (
+                #     (self.t,-1,3),
+                #     self.I_SD(transient=True, transient_input='V').subs(self.t0,0) / ( self.G() * ( 1 - ( (-.5*self.V_DS)/self.V_P) ) * self.V_DS ),
+                #     {
+                #         # 'ylim' : (-5e-5,5e-5),
+                #         'xlabel' : '$t/\\tau_i$',
+                #         'ylabel' : '$I_{SD}(t,V_G) / I_{SS}(V_G=0)$',
+                #     }
+                # ),
             },
 
             'Transient voltage and current step response' : {
@@ -316,12 +456,14 @@ class SimpleOECT(DeviceModel):
                     self.I_G_magnitude : (1,0, 1, 10),
                     self.V_G_magnitude : (1,0, 1, 10),
                     self.f : (.5, 0, .5),
-                    self.V_DS : (2, -2, 2)
+                    self.V_DS : (2, -2, 2),
+                    self.W : (100e-6, 10e-6, 10e-3),
+                    self.L : (100e-6, 10e-6, 10e-3),
                 },
 
                 'I_G(t)' : (
                     (self.t,*tlim),
-                    self.I_G_step(),
+                    self.I_G_pulse(),
                     {
                         'ylim' : (-1.5e-5,1.5e-5),
                         'ylabel' : '$I_G(t)$',
@@ -330,7 +472,7 @@ class SimpleOECT(DeviceModel):
 
                 'V_G(t)' : (
                     (self.t,*tlim),
-                    self.V_G_step(),
+                    self.V_G_pulse(),
                     {
                         'ylim' : (-1.5,1.5),
                         'ylabel' : '$V_G(t)$',
@@ -347,12 +489,23 @@ class SimpleOECT(DeviceModel):
                 ),
 
                 'I_SD(t,V_G)' : (
-                    (self.t,*tlim2),
+                    (self.t,*tlim),
                     self.I_SD(transient=True, transient_input='V'),
                     {
                         # 'ylim' : (-10,10),
                         'xlabel' : '$t/\\tau_i$',
                         'ylabel' : '$I_{SD}(t,V_G)$',
+                    }
+                ),
+
+                'I_SD(t,V_G)_@1s' : (
+                    (self.t,0.999,1.001),
+                    self.I_SD(transient=True, transient_input='V'),
+                    {
+                        # 'ylim' : (-10,10),
+                        'xlabel' : '$t/\\tau_i$',
+                        'ylabel' : '$I_{SD}(t,V_G)_{zoom}$',
+                        # 'yscale' : 'log',
                     }
                 ),
 
@@ -362,7 +515,51 @@ class SimpleOECT(DeviceModel):
                     {
                         # 'ylim' : (-5e-5,5e-5),
                         'xlabel' : '$t/\\tau_i$',
-                        'ylabel' : '$I_{SD}(t,I_G)$',
+                        'ylabel' : '$I_{SD}(t,V_G) / I_{SS}(V_G=0)$',
+                    }
+                ),
+            },
+
+            'Transient voltage and action potential response' : {
+                'sliders' : {
+                    self.t0 : (0,*tlim3, len(range(*tlim3))),
+                    self.t1 : (0.001,tlim3[0]+0.001, tlim3[1]+0.001, len(range(*tlim3))),
+                    self.prf : (0,*tlim3, len(range(*tlim3))),
+                    self.dc : (.5,0,1),
+                    self.f : (.5, 0, .5),
+                    self.V_G_magnitude : (1, -1e-1, 1e-1, 20),
+                    self.V_DS : (2, -2, 2),
+                    self.W : (100e-6, 10e-6, 10e-3),
+                    self.L : (100e-6, -5, -1, 20, '$L$', 'log'),
+                },
+
+                'V_G(t)' : (
+                    (self.t,*tlim3),
+                    self.V_G_pulse(),
+                    {
+                        'ylim' : (-1.5,1.5),
+                        'ylabel' : '$V_G(t)$',
+                    }
+                ),
+
+                'I_SD(t,V_G)' : (
+                    (self.t,*tlim3),
+                    self.I_SD(transient=True, transient_input='V'),
+                    {
+                        # 'ylim' : (-10,10),
+                        'xlabel' : '$t/\\tau_i$',
+                        'ylabel' : '$I_{SD}(t,V_G)$',
+                    }
+                ),
+
+                'I_SD(t,V_G)_@1s_20ms' : (
+                    (self.t, *tlim_zoom),
+                    self.I_SD(transient=True, transient_input='V'),
+                    {
+                        # 'ylim' : (-10,10),
+                        'xlabel' : '$t/\\tau_i$',
+                        'ylabel' : '$I_{SD}(t,V_G)_{zoom}$',
+                        # 'yscale' : 'log',
                     }
                 ),
             },
@@ -443,11 +640,11 @@ class SimpleOECT(DeviceModel):
 
     def diffusion_1D_flux(self, x):
         mu_p    = self.hole_mobility
-        p0      = self.hole_density
+        p_0      = self.hole_density
         V_g      = self.V_G
         V_p      = self.V_p
         
-        # J = q*mu_p*p0 * ( 1 - (V_g-V(x))/V_p ) * dV(x)/dx
+        # J = q*mu_p*p_0 * ( 1 - (V_g-V(x))/V_p ) * dV(x)/dx
         # return J
         pass
 
@@ -502,9 +699,24 @@ class SimpleOECT(DeviceModel):
             c_d     = self.c_d
             W       = self.W
             dx      = self.dx
+            V_DS     = self.V_DS
             V_G     = self.V_G
+            L_fixed = self.fp(self.L)
 
-            func = c_d * W * dx * (V_G - V)
+            func = c_d * W * (V_G - V)
+            # func = integrate(func, (self.x, 0, self.x))
+
+            func = Piecewise(
+                (
+                    0,
+                    ((x<0) | (x>L_fixed) | (V_G <= (x/L_fixed) * V_DS)),
+                ),
+                (
+                    func,
+                    ((x>0) & (x<=L_fixed)),
+                ),
+            )
+
             # L       = self.L
             # discretized_N = L/dx
             # func = Piecewise(
@@ -544,32 +756,72 @@ class SimpleOECT(DeviceModel):
 
         return func
 
+    def dedoped(self, transient=False):
+        x = self.x
+        L_fixed = self.fp(self.L)
+        Q = self.Q(transient=transient)#.subs(x,L_fixed),
+        
+        p_0      = self.p_0
+        q       = self.q
+        L       = self.L
+        W       = self.W
+        dx      = self.dx
+        V_DS     = self.V_DS
+        V_G     = self.V_G
+        T       = self.T
+
+        func = Q
+        func = integrate(func, (self.x, 0, L_fixed))
+        func = func/(q*p_0*(L*W*T))
+
+        func = Piecewise(
+            (
+                func,
+                # func.evalf({x:max_x}),
+                ((x>0) & (x<=L_fixed)),
+            ),
+            (
+                0,
+                True,
+            ),
+        )
+        
+        # Piecewise(
+        #     (
+        #         integrate(Q/(q*p_0*(L*W*T)), (self.x, 0, L)) ,
+        #         True,#Q > 0,
+        #     ),
+            # (
+            #     p_0,
+            #     True,
+            # )
+        # )
+
+        return func
+
     def p(self, transient=False):
+        x = self.x
         Q = self.Q(transient=transient)
         
-        p0      = self.p0
+        p_0      = self.p_0
         q       = self.q
         L       = self.L
         W       = self.W
         dx      = self.dx
         T       = self.T
 
-        if transient==False:
+        L_fixed = self.fp(self.L)
 
-            func = p0 * (1 - Q*(q*p0*(dx*W*T)))
-        
-        if transient==True:
-
-            func = Piecewise(
-                (
-                    p0 * (1 - Q/(q*p0*(L*W*T))),
-                    Q > 0,
-                ),
-                (
-                    p0,
-                    True,
-                )
+        func = Piecewise(
+            (
+                p_0 * (1 - Q/(q*p_0*(L*W*T))),
+                ((x>0) & (x<L_fixed)),
+            ),
+            (
+                p_0,
+                True,
             )
+        )
 
         return func
 
@@ -591,28 +843,28 @@ class SimpleOECT(DeviceModel):
     def J_e(self, Vx=None):
         '''Electron flux'''
         q = self.q
-        p0 = self.p0
+        p_0 = self.p_0
         mu_p = self.mu_p
         dVdx = self.dVdx(Vx)
 
-        func = q * mu_p * p0 * dVdx
+        func = q * mu_p * p_0 * dVdx
         
         return func
     
     def J(self):
         '''Total flux'''
         x = self.x
-        Vx = self.V()
+        V = self.V()
         E     = self.E()
 
         q       = self.q
         mu_p    = self.mu_p
-        p0       = self.p0
+        p_0       = self.p_0
         V_G      = self.V_G
-        V_DS     = self.V_DS
+        V_DS      = self.V_DS
         V_P      = self.V_P
 
-        func = q * mu_p * p0 * ( 1 - (V_G-V_DS)/V_P ) * E
+        func = q * mu_p * p_0 * ( 1 - (V_G-V_DS)/V_P ) * E
         
         return func
     
@@ -624,14 +876,14 @@ class SimpleOECT(DeviceModel):
 
         q       = self.q
         mu_p    = self.mu_p
-        p0       = self.p0
+        p_0       = self.p_0
         V_G      = self.V_G
         V_DS     = self.V_DS
         V_P      = self.V_P
         dVdx     = self.dVdx(Vx)
         L        = self.L
         
-        func = q * mu_p * p0 * ( 1 - (V_G-V_DS)/V_P ) * dVdx
+        func = q * mu_p * p_0 * ( 1 - (V_G-V_DS)/V_P ) * dVdx
         
         return func
     
@@ -643,7 +895,7 @@ class SimpleOECT(DeviceModel):
 
         q       = self.q
         mu_p    = self.mu_p
-        p0       = self.p0
+        p_0       = self.p_0
         V_G      = self.V_G
         V_DS     = self.V_DS
         V_P      = self.V_P
@@ -660,54 +912,77 @@ class SimpleOECT(DeviceModel):
         '''Total flux'''
         q       = self.q
         mu_p    = self.mu_p
-        p0       = self.p0
+        p_0       = self.p_0
         V_G      = self.V_G
         V_DS     = self.V_DS
         V_P      = self.V_P
         dVdx     = self.dVdx(Vx)
 
         
-        func = q * mu_p * p0 * ( 1 - (V_G-V_DS)/V_P ) * dVdx
+        func = q * mu_p * p_0 * ( 1 - (V_G-V_DS)/V_P ) * dVdx
         
         return func
 
     def G(self):
         q       = self.q
         mu_p    = self.mu_p
-        p0      = self.p0
+        p_0      = self.p_0
         W      = self.W
         L      = self.L
         T      = self.T
         
-        G = q * mu_p * p0 * W * T / L
+        G = q * mu_p * p_0 * W * T / L
         return(G)       
     
     def V_P_func(self):
         q       = self.q
-        p0       = self.p0
+        p_0       = self.p_0
         T       = self.T
         c_d     = self.c_d
         
-        V_P = q * p0 * T / c_d
+        V_P = q * p_0 * T / c_d
         return(V_P)       
 
-    def I_G_step(self):
+    def step(self, t, t0, t1):
+        func = (Heaviside(t-t0) - Heaviside(t-t1))
+
+        return(func)
+
+    def exp_pulse(self, t, t0, t1):
+        func = Piecewise(exp(t-t0), (t>t0) & (t<t1) )
+        
+        return(func)
+
+    def I_G_pulse(self):
         t  = self.t
         t0 = self.t0
         t1 = self.t1
         I_G_magnitude = self.I_G_magnitude
         
-        func = I_G_magnitude * (Heaviside(t-t0) - Heaviside(t-t1))
+        func = I_G_magnitude * self.step(t,t0,t1)
 
         return(func)
     
-    def V_G_step(self):
+    def V_G_pulse(self):
         t  = self.t
         t0 = self.t0
         t1 = self.t1
         V_G_magnitude = self.V_G_magnitude
        
-        func = V_G_magnitude * (Heaviside(t-t0) - Heaviside(t-t1))
+        func = V_G_magnitude * self.step(t,t0,t1)
+
+        return(func)
+    
+    def V_G_pulse_train(self):
+        t  = self.t
+        prf = self.prf
+        dc  = self.dc
+        V_G_magnitude = self.V_G_magnitude
+        
+        period = 1/(2* pi *prf)
+
+        # pulse_functions = [self.step(t,ti, ti+period*dc), (0<t for ti in np.linspace(0,MAX_TIME)]
+        func = V_G_magnitude * ceiling( Max(0, Min( sin(t/period) + (dc-.5)*2 , 1)) )
 
         return(func)
 
@@ -750,7 +1025,7 @@ class SimpleOECT(DeviceModel):
 
             # Input gate current
             if transient_input=='I':
-                I_G = self.I_G_step()
+                I_G = self.I_G_pulse()
                 
                 L = 0.5e-3
 
@@ -763,7 +1038,27 @@ class SimpleOECT(DeviceModel):
             # Input gate voltage
             if transient_input=='V':
                 # valid only in non-saturation region
-                V_G = self.V_G_step()
+                V_G = self.V_G_pulse()
+
+                # I_ss     = G * ( 1 - ((V_G - (.5*V_DS))/V_P) ) * V_DS
+                I_ss_0   = G * ( 1 - (       (-.5*V_DS)/V_P) ) * V_DS
+                I_ss_V_G = G * ( 1 - ((V_G - (.5*V_DS))/V_P) ) * V_DS
+
+                Delta_I_ss = I_ss_0 - I_ss_V_G # G*V_G*V_DS / V_P
+
+                A = W*L
+                C_d = c_d*A
+                tau_i = R_s*C_d
+                tau_e = L**2 / (mu * V_DS)
+                # print(self.fp(tau_i))
+                # print(self.fp(tau_e))
+
+                #actual equation is with t -> (t/tau_i) but here this is removed for easier plotting
+                I_SD = I_ss_V_G  +  Delta_I_ss * (1 - f*(tau_e/tau_i)) * exp(-(t-t0))
+            
+            if transient_input=='Vtrain':
+                # valid only in non-saturation region
+                V_G = self.V_G_pulse_train()
 
                 # I_ss     = G * ( 1 - ((V_G - (.5*V_DS))/V_P) ) * V_DS
                 I_ss_0   = G * ( 1 - (       (-.5*V_DS)/V_P) ) * V_DS

@@ -1,0 +1,5 @@
+matplotlib==3.8.3
+matplotlib-inline==0.1.6
+numpy==1.26.4
+sympy==1.12
+sympy_plot_backends==3.1.1

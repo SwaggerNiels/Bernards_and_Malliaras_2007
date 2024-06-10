@@ -6,7 +6,7 @@ import numpy as np
 import warnings
 warnings.filterwarnings('ignore')
 
-import seaborn as sns
+# import seaborn as sns
 from IPython.display import display, Latex
 
 from sympy import *
